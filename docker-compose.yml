@@ -1,0 +1,86 @@
+services:
+  # 1) Base de datos PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: db
+    restart: always
+    shm_size: "1gb"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: yahoo_answers_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db_init/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2) Redis Cache (¡CACHE AUMENTADO A 5000MB!)
+  cache:
+    image: redis:7-alpine
+    container_name: cache
+    # EL CAMBIO ESTÁ AQUÍ: '--maxmemory',"5000mb"'
+    command: ["redis-server","--save","","--appendonly","no","--maxmemory","5000mb","--maxmemory-policy","allkeys-lfu"]
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # 3) Cargador de Datos
+  data_loader:
+    build: .
+    container_name: data_loader
+    depends_on:
+      - db
+    volumes:
+      - ./:/app
+      - ./dataset:/data
+    working_dir: /app/data_loader
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: yahoo_answers_db
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_URL: postgresql://user:password@db:5432/yahoo_answers_db
+      DATA_FILE_PATH: /data/train.csv
+    command: ["python", "data_loader.py"]
+    restart: "no"
+
+  # 4) API Principal
+  app:
+    build: .
+    container_name: app
+    depends_on:
+      - db
+      - cache
+    env_file:
+      - .env
+    environment:
+      DB_URL: postgresql://user:password@db:5432/yahoo_answers_db
+      REDIS_URL: redis://cache:6379/0
+      CACHE_TTL: ${CACHE_TTL:-3600}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: always
+
+  # 5) Generador de Tráfico
+  traffic_gen:
+    build: ./traffic_generator
+    container_name: traffic_gen
+    env_file:
+      - .env
+    environment:
+      API_URL: http://app:8000/answer
+      DB_URL: postgresql://user:password@db:5432/yahoo_answers_db
+      QPM: ${QPM:-10}
+      TOTAL_QUERIES: ${TOTAL_QUERIES:-500}
+    depends_on:
+      - app
+    restart: "no"
+
+volumes:
+  postgres_data:

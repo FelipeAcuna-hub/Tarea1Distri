@@ -1,0 +1,39 @@
+services:
+  dataset_tester:
+    image: python:3.11-slim
+    container_name: dataset_tester
+    working_dir: /app
+    volumes:
+      - ./data:/app/data
+    command: >
+      sh -c "pip install pandas && python -c \"import pandas as pd; df=pd.read_csv('data/train.csv'); print(df.head())\""
+
+version: "3.9"
+services:
+  # ---- ya existente ----
+  dataset_tester:
+    image: python:3.11-slim
+    container_name: dataset_tester
+    working_dir: /app
+    volumes:
+      - ./data:/app/data
+    command: >
+      sh -c "pip install pandas && python -c \"import pandas as pd; df=pd.read_csv('data/train.csv'); print(df.head())\""
+
+  # ---- agrega esto ----
+  redis:
+    image: redis:7
+    command: ["redis-server","--save","","--appendonly","no","--maxmemory","256mb","--maxmemory-policy","allkeys-lfu"]
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./answer_api    # usa el Dockerfile que está dentro de esa carpeta
+    environment:
+      DB_URL: ${DB_URL:-postgresql://mac@host.docker.internal:5432/yahoo_answers_db}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_TTL: ${CACHE_TTL:-3600}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
